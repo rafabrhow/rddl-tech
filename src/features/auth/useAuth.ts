@@ -44,6 +44,9 @@ export function useAuth() {
     }
 
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      // Mantém a tela de verificação visível enquanto o perfil e as permissões são validados.
+      // Evita exibir a tela de acesso negado durante o carregamento inicial após o login.
+      setAuthLoading(true);
       setAuthenticatedUser(user);
       setAccessAllowed(false);
       setUserRole(null);
