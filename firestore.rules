@@ -1,0 +1,25 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // RDDL TECH - regras do Firestore para a arquitetura atual.
+    //
+    // O aplicativo não realiza leituras ou gravações diretamente pelo SDK
+    // cliente. As operações passam pelas rotas /api do Next.js, que validam
+    // o Firebase ID Token, os custom claims (role, ativo, empresaId),
+    // a existência da assistência e o estado da assinatura.
+    //
+    // As rotas do servidor utilizam Firebase Admin SDK. O Admin SDK ignora
+    // as regras do Firestore e deve permanecer protegido pelas validações
+    // de autorização implementadas no servidor e pelas credenciais privadas
+    // armazenadas somente nas variáveis de ambiente da Vercel.
+
+    // Bloqueia todo acesso direto pelo SDK cliente.
+    // Isso impede que um usuário contorne as validações multiempresa
+    // tentando consultar documentos de outra assistência.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

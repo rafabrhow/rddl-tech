@@ -1,36 +1,93 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ConsertaFone — Sistema de gestão para assistência técnica
 
-## Getting Started
+Projeto inicial de gestão para loja de conserto de celulares, inspirado nas referências visuais do arquivo `OsCelular.zip`.
 
-First, run the development server:
+## O que já está preparado
+
+- Dashboard com indicadores e ordens recentes.
+- Cadastro inicial de ordens de serviço.
+- Atualização de status das ordens.
+- Cadastro de clientes.
+- Cadastro básico de peças e acessórios com alerta de estoque mínimo.
+- Visão financeira simples baseada nas ordens.
+- Relatórios iniciais.
+- Layout responsivo para desktop, tablet e celular.
+- Estrutura inicial do Firebase (Authentication e Firestore).
+- Arquivo `.env.example` para configuração das credenciais.
+
+## Requisitos
+
+- Node.js 20.9 ou superior
+- npm
+- Conta Firebase, GitHub e Vercel
+
+## Como abrir no VS Code
+
+1. Descompacte o ZIP.
+2. Abra a pasta `assistencia-celular` no VS Code.
+3. Abra o terminal integrado.
+4. Execute:
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+5. Acesse `http://localhost:3000`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Firebase
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. Crie um projeto no Firebase Console.
+2. Adicione um aplicativo Web.
+3. Copie as credenciais do Firebase.
+4. Duplique `.env.example` e renomeie a cópia para `.env.local`.
+5. Preencha as variáveis com os dados do seu projeto Firebase.
+6. Ative Authentication (e-mail/senha) e Cloud Firestore no console.
 
-## Learn More
+O arquivo `src/lib/firebase.ts` inicializa Firebase quando as variáveis estão preenchidas. A interface desta primeira entrega ainda utiliza dados de demonstração e armazenamento local do navegador; não considere os dados locais como backup nem use esta versão em produção. Na próxima etapa vamos substituir a camada local por operações Firestore, implementar login e regras de segurança.
 
-To learn more about Next.js, take a look at the following resources:
+## Publicação
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### GitHub
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Crie um repositório vazio no GitHub e, no terminal da pasta do projeto, execute:
 
-## Deploy on Vercel
+```bash
+git init
+git add .
+git commit -m "Estrutura inicial do ConsertaFone"
+git branch -M main
+git remote add origin https://github.com/SEU-USUARIO/SEU-REPOSITORIO.git
+git push -u origin main
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### Vercel
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+1. Entre na Vercel e importe o repositório do GitHub.
+2. Mantenha as configurações detectadas para Next.js.
+3. Cadastre as mesmas variáveis `NEXT_PUBLIC_FIREBASE_*` em Environment Variables.
+4. Publique.
+
+## Organização
+
+```text
+src/
+  app/
+    globals.css
+    layout.tsx
+    page.tsx
+  lib/
+    firebase.ts
+    types.ts
+```
+
+## Próximas etapas sugeridas
+
+1. Ajustar nome, logo, cores e dados reais da assistência.
+2. Implementar autenticação e perfis de acesso.
+3. Conectar clientes, ordens, estoque e financeiro ao Firestore.
+4. Criar impressão/PDF da ordem de serviço e comprovante de entrada.
+5. Criar histórico de alterações, regras de segurança e backup.
+6. Refinar experiência mobile e notificações ao cliente.
+
+> Importante: esta é uma base de desenvolvimento. Antes de cadastrar dados reais de clientes, precisamos concluir autenticação, Firestore, regras de acesso e política de backup.
