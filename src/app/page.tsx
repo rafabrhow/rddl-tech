@@ -62,6 +62,8 @@ export default function Home() {
   const [mobileMenu,setMobileMenu] = useState(false);
   const [showNotifications,setShowNotifications] = useState(false);
   const notificationRef = useRef<HTMLDivElement>(null);
+  const [showUserMenu,setShowUserMenu] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!showNotifications) return;
@@ -81,6 +83,27 @@ export default function Home() {
       document.removeEventListener("pointerdown", handleClickOutside);
     };
   }, [showNotifications]);
+
+  useEffect(() => {
+    if (!showUserMenu) return;
+
+    const handleClickOutside = (event: PointerEvent) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(event.target as Node)) {
+        setShowUserMenu(false);
+      }
+    };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setShowUserMenu(false);
+    };
+
+    document.addEventListener("pointerdown", handleClickOutside);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("pointerdown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [showUserMenu]);
+
   const [readNotificationIds,setReadNotificationIds] = useState<string[]>([]);
   const notificationStorageKey = `rddl-notifications-read:${authenticatedUser?.uid || authenticatedUser?.email || "local"}`;
   useEffect(() => {
@@ -627,7 +650,7 @@ async function closeFinancialMonth(month:string,amount:number){
             <button type="button" aria-label="Notificações" aria-expanded={showNotifications} onClick={()=>setShowNotifications(value=>!value)} className="relative rounded-xl p-2 text-slate-500 hover:bg-slate-100">
               <Bell size={19}/>{notifications.some(item=>!readNotificationIds.includes(item.id))&&<><span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-rose-500 ring-2 ring-white"/><span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-600 px-1 text-[9px] font-bold text-white">{notifications.filter(item=>!readNotificationIds.includes(item.id)).length}</span></>}
             </button>
-            {showNotifications&&<div className="absolute right-0 top-full z-50 mt-2 w-[min(360px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
+            {showNotifications&&<div className="absolute right-0 top-full z-50 mt-2 w-[min(360px,calc(100vw-5rem))] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl sm:w-[min(360px,calc(100vw-2rem))]">
               <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
                 <div className="text-sm font-bold text-slate-800">Notificações</div>
                 <div className="flex items-center gap-2">
@@ -649,7 +672,37 @@ async function closeFinancialMonth(month:string,amount:number){
               })}</div>}
             </div>}
           </div>
-          <div className="flex items-center gap-2 border-l border-slate-200 pl-3"><div className="flex h-9 w-9 items-center justify-center rounded-full bg-violet-100 text-xs font-bold text-violet-700">{(authenticatedUser?.email || "AD").slice(0,2).toUpperCase()}</div><div className="hidden sm:block"><div className="text-xs font-semibold text-slate-700">Administrador</div><div className="text-[10px] text-slate-400">{authenticatedUser?.email}</div></div><button type="button" onClick={handleLogout} title="Sair do sistema" className="ml-1 rounded-lg p-2 text-slate-500 hover:bg-rose-50 hover:text-rose-600"><LogOut size={17}/></button></div>
+          <div ref={userMenuRef} className="relative flex items-center border-l border-slate-200 pl-3">
+            <button
+              type="button"
+              aria-label="Abrir menu da conta"
+              aria-expanded={showUserMenu}
+              onClick={() => { setShowUserMenu(value => !value); setShowNotifications(false); }}
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-violet-100 text-xs font-bold text-violet-700 transition hover:bg-violet-200 focus:outline-none focus:ring-2 focus:ring-violet-300"
+            >
+              {(authenticatedUser?.email || "AD").slice(0,2).toUpperCase()}
+            </button>
+            {showUserMenu && (
+              <div className="absolute right-0 top-full z-50 mt-2 w-64 max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
+                <div className="border-b border-slate-100 px-4 py-3">
+                  <div className="text-xs font-bold text-slate-700">Administrador</div>
+                  <div className="mt-1 break-all text-[11px] text-slate-500">{authenticatedUser?.email}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setShowUserMenu(false); handleLogout(); }}
+                  className="flex w-full items-center gap-3 px-4 py-3 text-left text-xs font-semibold text-rose-600 transition hover:bg-rose-50"
+                >
+                  <LogOut size={16}/>
+                  Sair do sistema
+                </button>
+              </div>
+            )}
+            <div className="hidden sm:block pl-2">
+              <div className="text-xs font-semibold text-slate-700">Administrador</div>
+              <div className="max-w-40 truncate text-[10px] text-slate-400">{authenticatedUser?.email}</div>
+            </div>
+          </div>
         </div>
       </header>
       <div className="mx-auto max-w-[1500px] p-4 md:p-8">
