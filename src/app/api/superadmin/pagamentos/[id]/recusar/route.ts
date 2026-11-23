@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAdminAuth, getAdminDb } from "@/lib/server/firebase-admin";
-import { registrarAuditoria } from "@/lib/server/audit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,20 +21,26 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
 
     const db = getAdminDb();
     const requestRef = db.collection("solicitacoesPagamento").doc(id);
-    let auditPayment: any = null;
+    const auditRef = db.collection("auditoriaAdmin").doc();
     await db.runTransaction(async (transaction) => {
       const snap = await transaction.get(requestRef);
       if (!snap.exists) throw new Error("NOT_FOUND");
       const payment = snap.data() ?? {};
       if (payment.status !== "pendente") throw new Error("ALREADY_REVIEWED");
-      auditPayment = payment;
       const now = new Date();
       transaction.update(requestRef, {
         status: "recusado", motivoRecusa: motivo, recusadoEm: now,
         recusadoPor: decoded.uid, atualizadoEm: now,
       });
+      // A recusa e seu registro de auditoria são confirmados na mesma transação.
+      transaction.create(auditRef, {
+        acao: "pagamento_recusado", descricao: "Comprovante de pagamento recusado",
+        empresaId: payment.empresaId || null, empresaNome: payment.empresaNome || null,
+        detalhes: { pagamentoId: id, valorCentavos: payment.valorCentavos || 0, motivo },
+        responsavelUid: decoded.uid, responsavelEmail: decoded.email || null,
+        criadoEm: now, origem: "painel_superadministrador",
+      });
     });
-    await registrarAuditoria({ acao: "pagamento_recusado", descricao: "Comprovante de pagamento recusado", empresaId: auditPayment?.empresaId || null, empresaNome: auditPayment?.empresaNome || "", detalhes: { pagamentoId: id, valorCentavos: auditPayment?.valorCentavos || 0, motivo } }, { uid: decoded.uid, email: decoded.email });
     return NextResponse.json({ rejected: true, message: "Pagamento recusado. A assistência poderá corrigir e enviar outro comprovante." });
   } catch (error) {
     const message = error instanceof Error ? error.message : "";

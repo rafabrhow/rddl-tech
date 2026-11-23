@@ -55,7 +55,7 @@ interface OrdersModuleProps {
   selectedOrder: ServiceOrder | null;
   setSelectedOrder: (order: ServiceOrder | null) => void;
   changeStatus: (id: string, status: OSStatus) => void;
-  updateOrder: (order: ServiceOrder, description: string) => void;
+  updateOrder: (order: ServiceOrder, description: string) => Promise<boolean>;
   consumeStock: (order: ServiceOrder) => void;
   onReverseOrder: (order: ServiceOrder) => void;
 }
@@ -313,6 +313,7 @@ export function OrdersModule(props: OrdersModuleProps) {
   const [warrantyDays, setWarrantyDays] = useState("90");
   const [companyDocument, setCompanyDocument] = useState<CompanyDocumentData>({});
   const [pdfLoading, setPdfLoading] = useState(false);
+  const [savingBudget, setSavingBudget] = useState(false);
   const [pdfError, setPdfError] = useState("");
 
   useEffect(() => {
@@ -346,20 +347,31 @@ export function OrdersModule(props: OrdersModuleProps) {
     setWarrantyDays(String(selectedOrder.warrantyDays ?? 90));
   }, [selectedOrder?.id]);
   const budgetTotal = Math.max(0, budgetItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0) + Number(laborValue || 0) - Number(discountValue || 0));
-  function saveTechnicalAndBudget(sendForApproval = false) {
-    if (!selectedOrder) return;
-    const now = new Date().toLocaleString("pt-BR");
-    const nextApproval: BudgetApproval = sendForApproval ? "Aguardando aprovação" : approval;
-    const entry: OSHistoryEntry = { id: String(Date.now()), description: sendForApproval ? "Orçamento enviado para aprovação do cliente" : "Diagnóstico e orçamento atualizados", actor: selectedOrder.technician || "Técnico", createdAt: now };
-    updateOrder({ ...selectedOrder, ...diagnosis, budgetItems, laborValue: Number(laborValue) || 0, discountValue: Number(discountValue) || 0, value: budgetTotal, budgetApproval: nextApproval, status: sendForApproval ? "Aguardando aprovação" : selectedOrder.status, history: [...(selectedOrder.history || []), entry] }, entry.description);
-    setApproval(nextApproval);
+  async function saveTechnicalAndBudget(sendForApproval = false) {
+    if (!selectedOrder || savingBudget) return;
+    setSavingBudget(true);
+    try {
+      const now = new Date().toLocaleString("pt-BR");
+      const nextApproval: BudgetApproval = sendForApproval ? "Aguardando aprovação" : approval;
+      const entry: OSHistoryEntry = { id: String(Date.now()), description: sendForApproval ? "Orçamento enviado para aprovação do cliente" : "Diagnóstico e orçamento atualizados", actor: selectedOrder.technician || "Técnico", createdAt: now };
+      const saved = await updateOrder({ ...selectedOrder, ...diagnosis, budgetItems, laborValue: Number(laborValue) || 0, discountValue: Number(discountValue) || 0, value: budgetTotal, budgetApproval: nextApproval, status: sendForApproval ? "Aguardando aprovação" : selectedOrder.status, history: [...(selectedOrder.history || []), entry] }, entry.description);
+      if (saved) setApproval(nextApproval);
+    } finally {
+      setSavingBudget(false);
+    }
   }
-  function decideBudget(decision: "Aprovado" | "Recusado") {
-    if (!selectedOrder) return;
-    const now = new Date().toLocaleString("pt-BR");
-    const entry: OSHistoryEntry = { id: String(Date.now()), description: `Orçamento ${decision.toLowerCase()}`, actor: selectedOrder.technician || "Técnico", createdAt: now };
-    updateOrder({ ...selectedOrder, budgetApproval: decision, budgetDecisionAt: now, budgetDecisionBy: "Registrado pela assistência", status: decision === "Aprovado" ? "Em conserto" : "Cancelado", history: [...(selectedOrder.history || []), entry] }, entry.description);
-    setApproval(decision);
+
+  async function decideBudget(decision: "Aprovado" | "Recusado") {
+    if (!selectedOrder || savingBudget) return;
+    setSavingBudget(true);
+    try {
+      const now = new Date().toLocaleString("pt-BR");
+      const entry: OSHistoryEntry = { id: String(Date.now()), description: `Orçamento ${decision.toLowerCase()}`, actor: selectedOrder.technician || "Técnico", createdAt: now };
+      const saved = await updateOrder({ ...selectedOrder, budgetApproval: decision, budgetDecisionAt: now, budgetDecisionBy: "Registrado pela assistência", status: decision === "Aprovado" ? "Em conserto" : "Cancelado", history: [...(selectedOrder.history || []), entry] }, entry.description);
+      if (saved) setApproval(decision);
+    } finally {
+      setSavingBudget(false);
+    }
   }
 
 
@@ -559,7 +571,7 @@ export function OrdersModule(props: OrdersModuleProps) {
               <label className="block"><span className="mb-1.5 block text-[11px] font-semibold text-slate-600">Observações técnicas</span><textarea value={diagnosis.technicalNotes} onChange={e => setDiagnosis(d => ({...d, technicalNotes:e.target.value}))} rows={2} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-xs"/></label>
             </section>
             <section className="space-y-3 rounded-xl border border-slate-200 p-4">
-              <div className="flex items-center justify-between"><h4 className="text-sm font-bold text-slate-800">Orçamento</h4><button type="button" onClick={() => setBudgetItems(items => [...items, {id:String(Date.now()),description:"",quantity:1,unitPrice:0}])} className="rounded-lg bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">+ Adicionar peça</button></div>
+              <div className="flex items-center justify-between"><h4 className="text-sm font-bold text-slate-800">Orçamento</h4><button type="button" disabled={savingBudget} onClick={() => setBudgetItems(items => [...items, {id:String(Date.now()),description:"",quantity:1,unitPrice:0}])} className="rounded-lg bg-violet-50 px-3 py-2 text-xs font-bold text-violet-700">+ Adicionar peça</button></div>
               {stock.length === 0 && <p className="text-xs text-amber-700">Nenhuma peça cadastrada no estoque. Cadastre peças no módulo Estoque para selecioná-las aqui.</p>}
               {budgetItems.map(item => <div key={item.id} className="grid grid-cols-12 gap-2 rounded-lg bg-slate-50 p-2">
                 <div className="col-span-6">
@@ -587,20 +599,20 @@ export function OrdersModule(props: OrdersModuleProps) {
               <div className="text-xs text-slate-500">Situação: <strong>{approval}</strong></div>
               <div className="flex flex-wrap gap-2">
                 {approval === "Aprovado" ? (
-                  <button type="button" onClick={() => saveTechnicalAndBudget(false)} className="flex-1 rounded-xl bg-brand-600 py-2.5 text-xs font-bold text-white">Salvar alterações</button>
+                  <button type="button" onClick={() => void saveTechnicalAndBudget(false)} disabled={savingBudget} className="flex-1 rounded-xl bg-brand-600 py-2.5 text-xs font-bold text-white disabled:opacity-50">{savingBudget ? "Salvando..." : "Salvar alterações"}</button>
                 ) : approval === "Aguardando aprovação" ? (
                   <>
-                    <button type="button" onClick={() => saveTechnicalAndBudget(false)} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-xs font-bold">Salvar alterações</button>
-                    <button type="button" onClick={() => saveTechnicalAndBudget(true)} className="flex-1 rounded-xl bg-brand-600 py-2.5 text-xs font-bold text-white">Reenviar para aprovação</button>
+                    <button type="button" onClick={() => void saveTechnicalAndBudget(false)} disabled={savingBudget} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-xs font-bold disabled:opacity-50">{savingBudget ? "Salvando..." : "Salvar alterações"}</button>
+                    <button type="button" onClick={() => void saveTechnicalAndBudget(true)} disabled={savingBudget} className="flex-1 rounded-xl bg-brand-600 py-2.5 text-xs font-bold text-white disabled:opacity-50">{savingBudget ? "Salvando..." : "Reenviar para aprovação"}</button>
                   </>
                 ) : (
                   <>
-                    <button type="button" onClick={() => saveTechnicalAndBudget(false)} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-xs font-bold">Salvar diagnóstico/orçamento</button>
-                    <button type="button" onClick={() => saveTechnicalAndBudget(true)} className="flex-1 rounded-xl bg-brand-600 py-2.5 text-xs font-bold text-white">Enviar para aprovação</button>
+                    <button type="button" onClick={() => void saveTechnicalAndBudget(false)} disabled={savingBudget} className="flex-1 rounded-xl border border-slate-200 py-2.5 text-xs font-bold disabled:opacity-50">{savingBudget ? "Salvando..." : "Salvar diagnóstico/orçamento"}</button>
+                    <button type="button" onClick={() => void saveTechnicalAndBudget(true)} disabled={savingBudget} className="flex-1 rounded-xl bg-brand-600 py-2.5 text-xs font-bold text-white disabled:opacity-50">{savingBudget ? "Salvando..." : "Enviar para aprovação"}</button>
                   </>
                 )}
               </div>
-              {approval === "Aguardando aprovação" && <div className="grid grid-cols-2 gap-2"><button type="button" onClick={() => decideBudget("Aprovado")} className="rounded-xl bg-emerald-600 py-2.5 text-xs font-bold text-white">Registrar aprovação</button><button type="button" onClick={() => decideBudget("Recusado")} className="rounded-xl bg-rose-600 py-2.5 text-xs font-bold text-white">Registrar recusa</button></div>}
+              {approval === "Aguardando aprovação" && <div className="grid grid-cols-2 gap-2"><button type="button" onClick={() => void decideBudget("Aprovado")} disabled={savingBudget} className="rounded-xl bg-emerald-600 py-2.5 text-xs font-bold text-white disabled:opacity-50">Registrar aprovação</button><button type="button" onClick={() => void decideBudget("Recusado")} disabled={savingBudget} className="rounded-xl bg-rose-600 py-2.5 text-xs font-bold text-white disabled:opacity-50">Registrar recusa</button></div>}
             </section>
             <section className="space-y-3 rounded-xl border border-slate-200 p-4">
               <div className="flex items-center justify-between gap-3"><div><h4 className="text-sm font-bold">Movimentação de peças</h4><p className="mt-1 text-[11px] text-slate-500">A baixa acontece somente quando o técnico confirmar a utilização.</p></div></div>

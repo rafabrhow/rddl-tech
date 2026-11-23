@@ -46,10 +46,6 @@ export async function POST(request: NextRequest) {
     const empresa = empresaSnap.data() ?? {};
     if (empresa.status === "ativa") return NextResponse.json({ error: "Esta assistência já possui uma assinatura ativa." }, { status: 409 });
 
-    const pending = await db.collection("solicitacoesPagamento")
-      .where("empresaId", "==", decoded.empresaId).where("status", "==", "pendente").limit(1).get();
-    if (!pending.empty) return NextResponse.json({ error: "Já existe uma solicitação aguardando análise. Aguarde a conferência do comprovante." }, { status: 409 });
-
     const form = await request.formData();
     const file = form.get("comprovante");
     if (!(file instanceof File)) return NextResponse.json({ error: "Anexe o comprovante do PIX." }, { status: 400 });
@@ -73,6 +69,12 @@ export async function POST(request: NextRequest) {
     const boundary = `rddl_${crypto.randomUUID()}`;
     const metadata = JSON.stringify({ name: `${Date.now()}_${safeName}`, mimeType: file.type, parents: [proofFolder] });
     const bytes = Buffer.from(await file.arrayBuffer());
+    const isJpeg = bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+    const isPng = bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    const isWebp = bytes.length >= 12 && bytes.toString("ascii", 0, 4) === "RIFF" && bytes.toString("ascii", 8, 12) === "WEBP";
+    const isPdf = bytes.length >= 5 && bytes.toString("ascii", 0, 5) === "%PDF-";
+    const validSignature = file.type === "image/jpeg" ? isJpeg : file.type === "image/png" ? isPng : file.type === "image/webp" ? isWebp : file.type === "application/pdf" ? isPdf : false;
+    if (!validSignature) return NextResponse.json({ error: "O conteúdo do arquivo não corresponde ao formato informado." }, { status: 415 });
     const body = Buffer.concat([
       Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n--${boundary}\r\nContent-Type: ${file.type}\r\n\r\n`),
       bytes, Buffer.from(`\r\n--${boundary}--`),
@@ -85,14 +87,34 @@ export async function POST(request: NextRequest) {
     if (!uploaded.ok || typeof driveFile.id !== "string") throw new Error("O Google Drive não conseguiu armazenar o comprovante.");
 
     const requestRef = db.collection("solicitacoesPagamento").doc();
-    await requestRef.set({
-      empresaId: decoded.empresaId, empresaNome: String(empresa.nome ?? ""),
-      adminUid: decoded.uid, adminEmail: String(decoded.email ?? ""),
-      planoId: "mensal", planoNome: "Plano mensal", valorCentavos,
-      status: "pendente", driveFileId: driveFile.id, arquivoNome: String(driveFile.name ?? safeName),
-      arquivoMimeType: file.type, arquivoTamanho: file.size,
-      criadoEm: new Date(), atualizadoEm: new Date(),
-    });
+    try {
+      await db.runTransaction(async transaction => {
+        // A consulta e a criação acontecem na mesma transação para evitar
+        // solicitações pendentes duplicadas em envios simultâneos.
+        const pendingQuery = db.collection("solicitacoesPagamento")
+          .where("empresaId", "==", decoded.empresaId)
+          .where("status", "==", "pendente").limit(1);
+        const pending = await transaction.get(pendingQuery);
+        if (!pending.empty) throw new Error("PAYMENT_ALREADY_PENDING");
+        transaction.create(requestRef, {
+          empresaId: decoded.empresaId, empresaNome: String(empresa.nome ?? ""),
+          adminUid: decoded.uid, adminEmail: String(decoded.email ?? ""),
+          planoId: "mensal", planoNome: "Plano mensal", valorCentavos,
+          status: "pendente", driveFileId: driveFile.id, arquivoNome: String(driveFile.name ?? safeName),
+          arquivoMimeType: file.type, arquivoTamanho: file.size,
+          criadoEm: new Date(), atualizadoEm: new Date(),
+        });
+      });
+    } catch (error) {
+      // Remove o arquivo do Drive se a transação não gravar a solicitação.
+      await fetch(`${DRIVE_FILES_URL}/${encodeURIComponent(driveFile.id)}`, {
+        method: "DELETE", headers: { Authorization: `Bearer ${accessToken}` }, cache: "no-store",
+      }).catch(() => undefined);
+      if (error instanceof Error && error.message === "PAYMENT_ALREADY_PENDING") {
+        return NextResponse.json({ error: "Já existe uma solicitação aguardando análise. Aguarde a conferência do comprovante." }, { status: 409 });
+      }
+      throw error;
+    }
     return NextResponse.json({ submitted: true, message: "Comprovante enviado. Aguardando confirmação do superadministrador." }, { status: 201 });
   } catch (error) {
     console.error("Falha ao solicitar contratação:", error);

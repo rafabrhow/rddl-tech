@@ -169,6 +169,21 @@ export async function PUT(request: NextRequest) {
       patch.updatedBy = decoded.uid;
       tx.update(ref, patch);
     });
-    return NextResponse.json({ saved: true });
+
+    // Retorna o histórico efetivamente gravado pelo servidor. Isso mantém o
+    // navegador sincronizado com actor/data definidos aqui e evita rejeitar
+    // a próxima atualização por comparar um histórico desatualizado.
+    const savedSnap = await ref.get();
+    if (!savedSnap.exists) throw new Error("ORDER_NOT_FOUND");
+    const savedData = savedSnap.data() ?? {};
+    return NextResponse.json({
+      saved: true,
+      order: {
+        id: savedSnap.id,
+        history: Array.isArray(savedData.history) ? savedData.history : [],
+        budgetDecisionAt: savedData.budgetDecisionAt ?? null,
+        budgetDecisionBy: savedData.budgetDecisionBy ?? null,
+      },
+    });
   } catch (error) { return authError(error); }
 }

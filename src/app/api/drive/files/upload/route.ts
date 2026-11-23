@@ -63,6 +63,12 @@ export async function POST(request: NextRequest) {
     if (file.size <= 0 || file.size > MAX_FILE_SIZE) return NextResponse.json({ error: "Cada foto deve ter até 10 MB." }, { status: 413 });
     if (!orderId || orderId.length > 80) return NextResponse.json({ error: "Identificador da ordem inválido." }, { status: 400 });
 
+    // Impede anexar arquivos a uma OS inexistente ou pertencente a outra assistência.
+    // A consulta é sempre feita dentro da subcoleção da empresa autenticada.
+    const orderRef = db.collection("empresas").doc(empresaId).collection("ordensServico").doc(orderId);
+    const orderSnap = await orderRef.get();
+    if (!orderSnap.exists) return NextResponse.json({ error: "Ordem de serviço não encontrada nesta assistência." }, { status: 404 });
+
     const settings = await db.collection("platformSettings").doc("googleDrive").get();
     const photoParentId = settings.data()?.folders?.["Aparelhos e fotos"];
     if (!settings.exists || typeof photoParentId !== "string") {
@@ -74,13 +80,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Google Drive não está conectado." }, { status: 409 });
     }
 
+    const fileBytes = Buffer.from(await file.arrayBuffer());
+    const isJpeg = fileBytes.length >= 3 && fileBytes[0] === 0xff && fileBytes[1] === 0xd8 && fileBytes[2] === 0xff;
+    const isPng = fileBytes.length >= 8 && fileBytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    const isWebp = fileBytes.length >= 12 && fileBytes.toString("ascii", 0, 4) === "RIFF" && fileBytes.toString("ascii", 8, 12) === "WEBP";
+    const validSignature = file.type === "image/jpeg" ? isJpeg : file.type === "image/png" ? isPng : file.type === "image/webp" ? isWebp : false;
+    if (!validSignature) return NextResponse.json({ error: "O conteúdo do arquivo não corresponde a uma imagem JPG, PNG ou WebP válida." }, { status: 415 });
+
     const token = await getGoogleDriveAccessToken(encrypted);
     const tenantFolderId = await findOrCreateFolder(token, empresaId, photoParentId);
     const orderFolderId = await findOrCreateFolder(token, orderId, tenantFolderId);
     const safeName = file.name.replace(/[^\w.\-]/g, "_").slice(-100) || "foto-aparelho";
     const boundary = `rddl_${crypto.randomUUID()}`;
     const metadata = JSON.stringify({ name: `${Date.now()}_${safeName}`, mimeType: file.type, parents: [orderFolderId] });
-    const fileBytes = Buffer.from(await file.arrayBuffer());
     const body = Buffer.concat([
       Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n--${boundary}\r\nContent-Type: ${file.type}\r\n\r\n`),
       fileBytes,

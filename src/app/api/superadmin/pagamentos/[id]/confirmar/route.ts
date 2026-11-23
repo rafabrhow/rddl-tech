@@ -1,7 +1,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { getAdminAuth, getAdminDb } from "@/lib/server/firebase-admin";
-import { registrarAuditoria } from "@/lib/server/audit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -49,43 +48,65 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     if (!id || id.length > 150) return NextResponse.json({ error: "Solicitação inválida." }, { status: 400 });
     const db = getAdminDb();
     const requestRef = db.collection("solicitacoesPagamento").doc(id);
-    const requestSnap = await requestRef.get();
-    if (!requestSnap.exists) return NextResponse.json({ error: "Solicitação não encontrada." }, { status: 404 });
-    const payment = requestSnap.data() ?? {};
-    if (payment.status !== "pendente" || typeof payment.empresaId !== "string") {
-      return NextResponse.json({ error: "Esta solicitação já foi analisada." }, { status: 409 });
-    }
-    const empresaRef = db.collection("empresas").doc(payment.empresaId);
-    const empresaSnap = await empresaRef.get();
-    if (!empresaSnap.exists) return NextResponse.json({ error: "A assistência vinculada não foi encontrada." }, { status: 404 });
-
+    let companyName = "";
     const now = new Date();
     const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-    const subscriptionRef = db.collection("assinaturas").doc();
-    const batch = db.batch();
-    batch.update(empresaRef, {
-      status: "ativa",
-      planoAtual: { id: "mensal", nome: "Plano mensal", tipo: "pago", valorCentavos: Number(payment.valorCentavos) || 3000 },
-      assinaturaAtivadaEm: now,
-      assinaturaVenceEm: expiresAt,
-      atualizadoEm: now,
+    // ID determinístico impede a criação de mais de uma assinatura para o mesmo pagamento.
+    const subscriptionRef = db.collection("assinaturas").doc(`pagamento_${id}`);
+    const auditRef = db.collection("auditoriaAdmin").doc();
+
+    await db.runTransaction(async transaction => {
+      const requestSnap = await transaction.get(requestRef);
+      if (!requestSnap.exists) throw new Error("NOT_FOUND");
+      const currentPayment = requestSnap.data() ?? {};
+      if (currentPayment.status !== "pendente" || typeof currentPayment.empresaId !== "string" || !currentPayment.empresaId) {
+        throw new Error("ALREADY_REVIEWED");
+      }
+      const empresaRef = db.collection("empresas").doc(currentPayment.empresaId);
+      const [empresaSnap, existingSubscription] = await Promise.all([
+        transaction.get(empresaRef), transaction.get(subscriptionRef),
+      ]);
+      if (!empresaSnap.exists) throw new Error("COMPANY_NOT_FOUND");
+      if (existingSubscription.exists) throw new Error("SUBSCRIPTION_EXISTS");
+
+      companyName = String(currentPayment.empresaNome || empresaSnap.data()?.nome || "");
+      const valorCentavos = Number.isInteger(currentPayment.valorCentavos) && currentPayment.valorCentavos > 0
+        ? currentPayment.valorCentavos : 3000;
+      transaction.update(empresaRef, {
+        status: "ativa",
+        planoAtual: { id: "mensal", nome: "Plano mensal", tipo: "pago", valorCentavos },
+        assinaturaAtivadaEm: now,
+        assinaturaVenceEm: expiresAt,
+        atualizadoEm: now,
+      });
+      transaction.create(subscriptionRef, {
+        empresaId: currentPayment.empresaId, contratanteUid: currentPayment.adminUid,
+        planoId: "mensal", planoNome: "Plano mensal", tipoPlano: "pago",
+        status: "ativa", inicio: now, fim: expiresAt, duracaoDias: 30,
+        valorCentavos, pagamentoId: id, confirmadoPor: decoded.uid,
+        confirmadoEm: now, createdAt: now,
+      });
+      transaction.update(requestRef, {
+        status: "confirmado", confirmadoEm: now, confirmadoPor: decoded.uid,
+        assinaturaId: subscriptionRef.id,
+      });
+      // O registro de auditoria é gravado atomicamente com a confirmação.
+      transaction.create(auditRef, {
+        acao: "pagamento_confirmado", descricao: "Pagamento confirmado e assinatura ativada",
+        empresaId: currentPayment.empresaId, empresaNome: companyName || null,
+        alvoUid: currentPayment.adminUid || null, alvoEmail: currentPayment.adminEmail || null,
+        detalhes: { pagamentoId: id, assinaturaId: subscriptionRef.id, valorCentavos, vencimento: expiresAt.toISOString() },
+        responsavelUid: decoded.uid, responsavelEmail: decoded.email || null,
+        criadoEm: now, origem: "painel_superadministrador",
+      });
     });
-    batch.set(subscriptionRef, {
-      empresaId: payment.empresaId, contratanteUid: payment.adminUid,
-      planoId: "mensal", planoNome: "Plano mensal", tipoPlano: "pago",
-      status: "ativa", inicio: now, fim: expiresAt, duracaoDias: 30,
-      valorCentavos: Number(payment.valorCentavos) || 3000,
-      pagamentoId: id, confirmadoPor: decoded.uid, confirmadoEm: now, createdAt: now,
-    });
-    batch.update(requestRef, {
-      status: "confirmado", confirmadoEm: now, confirmadoPor: decoded.uid,
-      assinaturaId: subscriptionRef.id,
-    });
-    await batch.commit();
-    await registrarAuditoria({ acao: "pagamento_confirmado", descricao: "Pagamento confirmado e assinatura ativada", empresaId: payment.empresaId, empresaNome: payment.empresaNome || empresaSnap.data()?.nome || "", alvoUid: payment.adminUid || null, alvoEmail: payment.adminEmail || null, detalhes: { pagamentoId: id, assinaturaId: subscriptionRef.id, valorCentavos: Number(payment.valorCentavos) || 3000, vencimento: expiresAt.toISOString() } }, { uid: decoded.uid, email: decoded.email });
     return NextResponse.json({ confirmed: true, message: "Pagamento confirmado e assinatura ativada por 30 dias." });
   } catch (error) {
+    const code = error instanceof Error ? error.message : "";
+    if (code === "NOT_FOUND") return NextResponse.json({ error: "Solicitação não encontrada." }, { status: 404 });
+    if (code === "ALREADY_REVIEWED" || code === "SUBSCRIPTION_EXISTS") return NextResponse.json({ error: "Esta solicitação já foi analisada ou já possui assinatura." }, { status: 409 });
+    if (code === "COMPANY_NOT_FOUND") return NextResponse.json({ error: "A assistência vinculada não foi encontrada." }, { status: 404 });
     console.error("Falha ao confirmar pagamento:", error);
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Não foi possível confirmar o pagamento." }, { status: 500 });
+    return NextResponse.json({ error: "Não foi possível confirmar o pagamento." }, { status: 500 });
   }
 }
